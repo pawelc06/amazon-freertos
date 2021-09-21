@@ -1,6 +1,6 @@
 /*
- * FreeRTOS V202107.00
- * Copyright (C) 2021 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
+ * FreeRTOS V202012.00
+ * Copyright (C) 2020 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -49,6 +49,11 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+
+#include "esp_sntp.h"
+
+//#include "lwip/include/apps/esp_sntp.h"
 
 /* Demo Specific configs. */
 #include "mqtt_demo_mutual_auth_config.h"
@@ -83,6 +88,91 @@
 
 /* Include AWS IoT metrics macros header. */
 #include "aws_iot_metrics.h"
+
+#include "iot_button.h"
+#include "rotary_encoder.h"
+
+#include "esp_log.h"
+
+/****** Button 2 ***************/
+static const char *TAG = "BUTTON TEST";
+
+#define BUTTON_IO_NUM  0
+#define BUTTON_ACTIVE_LEVEL   0
+#define BUTTON_NUM 16
+#define BLINK_LED 13
+
+#define MODE_TEMPERATURE 0
+#define MODE_PRESSURE 1
+
+static button_handle_t g_btns[BUTTON_NUM] = {0};
+volatile int failure=0;
+
+char cPayload[100];
+int32_t i = 0;
+int32_t t = 30;
+volatile int32_t pressure = 250;
+volatile int32_t temperature = 22;
+volatile uint8_t controlMode=MODE_TEMPERATURE;
+volatile bool isConnectionEstablished = false;
+uint8_t e=0;
+char macStr[20];
+
+static int get_btn_index(button_handle_t btn)
+{
+    for (size_t i = 0; i < BUTTON_NUM; i++) {
+        if (btn == g_btns[i]) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+
+static void button_single_click_cb(void *arg)
+{
+    int btnIdx;
+    btnIdx = get_btn_index((button_handle_t)arg);
+    ESP_LOGI(TAG, "BTN%d: BUTTON_SINGLE_CLICK", btnIdx);
+    
+    printf("*************** Button pressed!!\n");
+    switch (btnIdx){
+        case 0:
+            failure = !failure;
+            printf("errorCode: %d \n", failure);
+            gpio_set_level(BLINK_LED, !failure);
+            break;
+        case 1:
+            controlMode = !controlMode;
+            break;
+    }
+    
+    
+}
+
+
+/*****************/
+#include <stdio.h>
+#include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "u8g2_esp32_hal.h"
+ 
+#define ESP_INTR_FLAG_DEFAULT 0
+ 
+
+#define GPIO_INPUT_IO_0 33
+int buttonCount = 0;
+int i1 = 0;
+ 
+SemaphoreHandle_t xSemaphore = NULL;
+ 
+TaskHandle_t printVariableTask = NULL;
+TaskHandle_t button15Task = NULL;
+TaskHandle_t displayOLEDTask = NULL;
+
+/*****************/
 
 /*------------- Demo configurations -------------------------*/
 
@@ -133,7 +223,7 @@
  * demo.
  */
 #ifndef democonfigMQTT_MAX_DEMO_COUNT
-    #define democonfigMQTT_MAX_DEMO_COUNT    ( 3 )
+    #define democonfigMQTT_MAX_DEMO_COUNT    ( 20 )
 #endif
 /*-----------------------------------------------------------*/
 
@@ -165,7 +255,7 @@
  * The topic name starts with the client identifier to ensure that each demo
  * interacts with a unique topic name.
  */
-#define mqttexampleTOPIC                                  democonfigCLIENT_IDENTIFIER "/example/topic"
+#define mqttexampleTOPIC                                  democonfigCLIENT_IDENTIFIER "/iot/data"
 
 /**
  * @brief The number of topic filters to subscribe.
@@ -175,7 +265,7 @@
 /**
  * @brief The MQTT message published in this example.
  */
-#define mqttexampleMESSAGE                                "Hello World!"
+#define mqttexampleMESSAGE                                "{ \"status\": 0, \"temp\": 20.5 }"
 
 /**
  * @brief Time in ticks to wait between each cycle of the demo implemented
@@ -229,7 +319,174 @@
  */
 #define MILLISECONDS_PER_TICK                             ( MILLISECONDS_PER_SECOND / configTICK_RATE_HZ )
 
+#define ENABLE_HALF_STEPS false  // Set to true to enable tracking of rotary encoder at half step resolution
+#define RESET_AT          0      // Set to a positive non-zero number to reset the position if this value is exceeded
+#define FLIP_DIRECTION    false  // Set to true to reverse the clockwise/counterclockwise sense
+
 /*-----------------------------------------------------------*/
+
+    
+
+    void displayTask(void *pvParameter) {
+        
+        u8g2_esp32_hal_t u8g2_esp32_hal = U8G2_ESP32_HAL_DEFAULT;
+        u8g2_esp32_hal.sda = 21;
+        u8g2_esp32_hal.scl = 22;
+        char bufferTemp[32];
+        char bufferPressure[32];
+        int32_t lastPressureVal,lastTempVal;
+
+        
+        u8g2_esp32_hal_init(u8g2_esp32_hal);
+
+        u8g2_t u8g2;
+
+        lastPressureVal = 0;
+        lastTempVal = 0;
+
+        u8g2_Setup_ssd1306_i2c_128x64_noname_f(  &u8g2, U8G2_R0,  u8g2_esp32_i2c_byte_cb,  u8g2_esp32_gpio_and_delay_cb);
+
+        
+
+        u8x8_SetI2CAddress(&u8g2.u8x8,0x3C);
+        u8g2_InitDisplay(&u8g2);
+        u8g2_SetPowerSave(&u8g2, 0);
+        
+
+       
+        
+        u8g2_SetFont(&u8g2, u8g2_font_timR14_tf);
+
+        
+        while (1) {
+            //if((lastPressureVal != pressure) || (lastTempVal != temperature)){
+            sprintf(bufferPressure,"P: %d kPa",pressure);
+            sprintf(bufferTemp,"T: %d C",temperature);
+            u8g2_ClearBuffer(&u8g2);
+            u8g2_DrawStr(&u8g2, 2,17,bufferTemp);
+            u8g2_DrawStr(&u8g2, 2,37,bufferPressure);
+            u8g2_SendBuffer(&u8g2);
+            //    lastPressureVal = pressure;
+            //    lastTempVal = temperature;
+            //}
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            
+        }
+
+    
+    }
+
+    void buttonTask(void *pvParameter) {
+        printf("************************ Starting button task...");
+        button_config_t cfg1 = {
+            .type = BUTTON_TYPE_GPIO,
+            .gpio_button_config = {
+                .gpio_num = 15,
+                .active_level = 0,
+            },
+        };
+
+        
+        button_config_t cfg2 = {
+            .type = BUTTON_TYPE_GPIO,
+            .gpio_button_config = {
+                .gpio_num = 18,
+                .active_level = 0,
+            },
+        };
+        
+
+        g_btns[0] = iot_button_create(&cfg1);
+        g_btns[1] = iot_button_create(&cfg2);
+        
+
+        if(g_btns[0] != NULL){
+            printf("*********** Button 0 created!");
+        } else {
+            printf("********** Button 0 error!");
+        }
+
+        
+        if(g_btns[1] != NULL){
+            printf("*********** Button 1 created!");
+        } else {
+            printf("********** Button 1 error!");
+        }
+        
+
+        iot_button_register_cb(g_btns[0], BUTTON_SINGLE_CLICK, button_single_click_cb);
+        iot_button_register_cb(g_btns[1], BUTTON_SINGLE_CLICK, button_single_click_cb);
+
+        
+        while (1) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            
+        }
+
+        iot_button_delete(g_btns[0]);
+        iot_button_delete(g_btns[1]);
+    
+    }
+void encoder_task(void* arg) {
+    
+    /*************** Rotary encoder *********************/
+	ESP_ERROR_CHECK(gpio_install_isr_service(0));
+
+    // Initialise the rotary encoder device with the GPIOs for A and B signals
+    rotary_encoder_info_t info = { 0 };
+    ESP_ERROR_CHECK(rotary_encoder_init(&info, 27, 26));
+    ESP_ERROR_CHECK(rotary_encoder_enable_half_steps(&info, ENABLE_HALF_STEPS));
+
+    // Create a queue for events from the rotary encoder driver.
+    // Tasks can read from this queue to receive up to date position information.
+    QueueHandle_t event_queue = rotary_encoder_create_queue();
+    ESP_ERROR_CHECK(rotary_encoder_set_queue(&info, event_queue));
+    /*********************************************************************/
+
+    // infinite loop
+    for(;;) {
+        
+        // Wait for incoming events on the event queue.
+        rotary_encoder_event_t event = { 0 };
+        if (xQueueReceive(event_queue, &event, 1000 / portTICK_PERIOD_MS) == pdTRUE)
+        {
+            ESP_LOGI(TAG, "Event: position %d, direction %s", event.state.position,
+                     event.state.direction ? (event.state.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? "CW" : "CCW") : "NOT_SET");
+            
+            if(controlMode == MODE_PRESSURE){
+                if(event.state.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ){
+                    
+                        pressure = pressure - 1;    
+                        if(pressure <200)
+                            pressure = 200;
+                        
+                } else {
+                    pressure = pressure + 1;
+                    
+                }
+                printf("**** Pressure: %d\n", pressure);
+            } else { //controlMode == MODE_TEMPERATURE
+                if(event.state.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ){
+                    
+                        temperature = temperature - 1;    
+                        if(temperature <0)
+                            temperature = 0;
+                        
+                } else {
+                    temperature = temperature + 1;
+                    
+                }
+                printf("**** Temperature: %d\n", temperature);
+            }
+        }
+
+        
+    }
+
+    ESP_LOGE(TAG, "queue receive failed");
+
+    ESP_ERROR_CHECK(rotary_encoder_uninit(&info));
+}
 
 /**
  * @brief Each compilation unit that consumes the NetworkContext must define it.
@@ -490,8 +747,58 @@ int RunCoreMqttMutualAuthDemo( bool awsIotMqttMode,
     BaseType_t xIsConnectionEstablished = pdFALSE;
     SecureSocketsTransportParams_t secureSocketsTransportParams = { 0 };
 
+    int macByte[6];
+    
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_init();
+
+    esp_read_mac(macStr,0);
+    for(int i=0;i<6;i++){
+        macByte[i] = macStr[i];
+    }
+
+        sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", macByte[0],macByte[1],macByte[2],macByte[3],macByte[4],macByte[5]);
+    
+
+	/*************************************** BUTTON **************************/
+	// create the binary semaphore
+    
+    xSemaphore = xSemaphoreCreateBinary();
+ 
+    // configure button and led pins as GPIO pins
+    gpio_pad_select_gpio(GPIO_INPUT_IO_0);
+    gpio_pad_select_gpio(BLINK_LED);
+ 
+    // set the correct direction
+    gpio_set_direction(GPIO_INPUT_IO_0, GPIO_MODE_INPUT);
+    gpio_set_direction(BLINK_LED, GPIO_MODE_OUTPUT);
+
+    gpio_set_level(BLINK_LED, 1);
+ 
+    // enable interrupt on falling (1->0) edge for button pin
+    gpio_set_intr_type(GPIO_INPUT_IO_0, GPIO_INTR_POSEDGE);
+ 
+    xTaskCreate(encoder_task, "encoder_task", 2048, NULL, 3, NULL);
+  
+	
+	/****************************************************************************/
+
+    /************ Button 2 ***********/
+    
+    int pass = 25;
+    xTaskCreate(&buttonTask, "buttonTask", 2048, (void*) pass, 4, &button15Task);
+    
+    /******************* DISPLAY *********************/
+   xTaskCreate(&displayTask, "displayTask", 4096, (void*) pass, 5, &displayOLEDTask);
+   
+   
+
+   /********************************************/
+   
+
     /* Upon return, pdPASS will indicate a successful demo execution.
-    * pdFAIL will indicate some failures occurred during execution. The
+    * pdFAIL will indicate some failures occurred during execution. The 
     * user of this demo must check the logs for any failure codes. */
     BaseType_t xDemoStatus = pdFAIL;
 
@@ -525,6 +832,7 @@ int RunCoreMqttMutualAuthDemo( bool awsIotMqttMode,
             /* Set a flag indicating a TLS connection exists. This is done to
              * disconnect if the loop exits before disconnection happens. */
             xIsConnectionEstablished = pdTRUE;
+            isConnectionEstablished = true;
 
             /* Sends an MQTT Connect packet over the already established TLS connection,
              * and waits for connection acknowledgment (CONNACK) packet. */
@@ -974,6 +1282,44 @@ static BaseType_t prvMQTTPublishToTopic( MQTTContext_t * pxMQTTContext )
     MQTTStatus_t xResult;
     MQTTPublishInfo_t xMQTTPublishInfo;
     BaseType_t xStatus = pdPASS;
+	
+
+/*
+struct timeval tv_now;
+
+gettimeofday(&tv_now, NULL);
+
+int64_t time_s = (int64_t)tv_now.tv_sec ;
+LogInfo( ( "[4] Getting time:::: %ld",time_s) );
+*/
+
+
+time_t now;
+char strftime_buf[64];
+struct tm timeinfo;
+
+LogInfo( ( "[1] Getting time...") );
+time(&now);
+LogInfo( ( "[2] time function completed") );
+// Set timezone to China Standard Time
+//setenv("TZ", "CST-8", 1);
+setenv("TZ", "GST-2", 1);
+tzset();
+
+localtime_r(&now, &timeinfo);
+strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+LogInfo( ( "************* The current date/time : %s", strftime_buf) );
+LogInfo( ( "************* The current timestamp : %ld", now) );
+	
+	if(timeinfo.tm_year <(2021-1900)){
+        LogInfo( ( "************* Time not yet set by NTP...") );
+        xStatus = pdFAIL;
+        return xStatus;
+    }
+            
+	//i = random(20,90);
+	LogInfo( ( "############# errorCode : %d", failure) );
+    sprintf(cPayload, "{ \"device_mac\": \"%s\", \"ts\": %ld,\"temp\": %d, \"pressure\": %d, \"error_code\": %d}",macStr, now, temperature,pressure,failure);
 
     /* Some fields are not used by this demo so start with everything at 0. */
     ( void ) memset( ( void * ) &xMQTTPublishInfo, 0x00, sizeof( xMQTTPublishInfo ) );
@@ -983,8 +1329,14 @@ static BaseType_t prvMQTTPublishToTopic( MQTTContext_t * pxMQTTContext )
     xMQTTPublishInfo.retain = false;
     xMQTTPublishInfo.pTopicName = mqttexampleTOPIC;
     xMQTTPublishInfo.topicNameLength = ( uint16_t ) strlen( mqttexampleTOPIC );
-    xMQTTPublishInfo.pPayload = mqttexampleMESSAGE;
+    
+	xMQTTPublishInfo.pPayload = cPayload;
+    xMQTTPublishInfo.payloadLength = strlen( cPayload );
+	
+	/*
+	xMQTTPublishInfo.pPayload = mqttexampleMESSAGE;
     xMQTTPublishInfo.payloadLength = strlen( mqttexampleMESSAGE );
+	*/
 
     /* Get a unique packet id. */
     usPublishPacketIdentifier = MQTT_GetPacketId( pxMQTTContext );
