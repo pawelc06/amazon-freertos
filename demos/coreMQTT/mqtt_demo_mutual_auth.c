@@ -124,7 +124,8 @@ int32_t i = 0;
 int32_t t = 30;
 volatile int32_t pressure = 250;
 volatile int32_t temperature = 22;
-volatile uint8_t controlMode=MODE_TEMPERATURE;
+volatile float temperatureFloat = 22.0;
+volatile uint8_t controlMode=MODE_PRESSURE;
 volatile bool isConnectionEstablished = false;
 uint8_t e=0;
 char macStr[20];
@@ -425,17 +426,7 @@ TaskHandle_t sensorTempTask = NULL;
         ds18b20_set_resolution(ds18b20_info, DS18B20_RESOLUTION);
     }
 
-//    // Read temperatures from all sensors sequentially
-//    while (1)
-//    {
-//        printf("\nTemperature readings (degrees C):\n");
-//        for (int i = 0; i < num_devices; ++i)
-//        {
-//            float temp = ds18b20_get_temp(devices[i]);
-//            printf("  %d: %.3f\n", i, temp);
-//        }
-//        vTaskDelay(1000 / portTICK_PERIOD_MS);
-//    }
+
 
     // Check for parasitic-powered devices
     bool parasitic_power = false;
@@ -489,6 +480,8 @@ TaskHandle_t sensorTempTask = NULL;
                 }
 
                 printf("  %d: %.1f    %d errors\n", i, readings[i], errors_count[i]);
+                //temperature = (uint32_t) readings[i];
+                temperatureFloat = readings[i];
             }
 
             vTaskDelayUntil(&last_wake_time, SAMPLE_PERIOD / portTICK_PERIOD_MS);
@@ -543,8 +536,9 @@ TaskHandle_t sensorTempTask = NULL;
         
         while (1) {
             //if((lastPressureVal != pressure) || (lastTempVal != temperature)){
-            sprintf(bufferPressure,"P: %d kPa",pressure);
-            sprintf(bufferTemp,"T: %d C",temperature);
+            sprintf(bufferPressure,"P: %d  kPa",pressure);
+            //sprintf(bufferTemp,"T: %d C",temperature);
+            sprintf(bufferTemp,"T: %.1f C",temperatureFloat);
             u8g2_ClearBuffer(&u8g2);
             u8g2_DrawStr(&u8g2, 2,17,bufferTemp);
             u8g2_DrawStr(&u8g2, 2,37,bufferPressure);
@@ -1502,7 +1496,7 @@ LogInfo( ( "************* The current timestamp : %ld", now) );
             
 	//i = random(20,90);
 	LogInfo( ( "############# errorCode : %d", failure) );
-    sprintf(cPayload, "{ \"device_mac\": \"%s\", \"ts\": %ld,\"temp\": %d, \"pressure\": %d, \"error_code\": %d}",macStr, now, temperature,pressure,failure);
+    sprintf(cPayload, "{ \"device_mac\": \"%s\", \"ts\": %ld,\"temp\": %.1f, \"pressure\": %d, \"error_code\": %d}",macStr, now, temperatureFloat,pressure,failure);
 
     /* Some fields are not used by this demo so start with everything at 0. */
     ( void ) memset( ( void * ) &xMQTTPublishInfo, 0x00, sizeof( xMQTTPublishInfo ) );
