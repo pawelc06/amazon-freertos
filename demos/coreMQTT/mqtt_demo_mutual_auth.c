@@ -340,7 +340,7 @@ TaskHandle_t sensorTempTask = NULL;
 
     void sensorTask(void *pvParameter) {
         
-        /****************************************************************************/
+    /****************************************************************************/
     // Create a 1-Wire bus, using the RMT timeslot driver
     OneWireBus * owb;
     owb_rmt_driver_info rmt_driver_info;
@@ -366,7 +366,7 @@ TaskHandle_t sensorTempTask = NULL;
     printf("Found %d device%s\n", num_devices, num_devices == 1 ? "" : "s");
 
         
-         if (num_devices == 1)
+    if (num_devices == 1)
     {
         // For a single device only:
         OneWireBus_ROMCode rom_code;
@@ -384,26 +384,7 @@ TaskHandle_t sensorTempTask = NULL;
     }
     else
     {
-        // Search for a known ROM code (LSB first):
-        // For example: 0x1502162ca5b2ee28
-        OneWireBus_ROMCode known_device = {
-            .fields.family = { 0x28 },
-            .fields.serial_number = { 0xee, 0xb2, 0xa5, 0x2c, 0x16, 0x02 },
-            .fields.crc = { 0x15 },
-        };
-        char rom_code_s[OWB_ROM_CODE_STRING_LENGTH];
-        owb_string_from_rom_code(known_device, rom_code_s, sizeof(rom_code_s));
-        bool is_present = false;
-
-        owb_status search_status = owb_verify_rom(owb, known_device, &is_present);
-        if (search_status == OWB_STATUS_OK)
-        {
-            printf("Device %s is %s\n", rom_code_s, is_present ? "present" : "not present");
-        }
-        else
-        {
-            printf("An error occurred searching for known device: %d", search_status);
-        }
+        printf("!!!!! Temperature sensor not found");
     }
 
     // Create DS18B20 devices on the 1-Wire bus
@@ -490,6 +471,8 @@ TaskHandle_t sensorTempTask = NULL;
     else
     {
         printf("\nNo DS18B20 devices detected!\n");
+        vTaskSuspend(NULL);
+      
     }
 
     // clean up dynamically allocated data
@@ -645,15 +628,15 @@ void encoder_task(void* arg) {
             } else { //controlMode == MODE_TEMPERATURE
                 if(event.state.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ){
                     
-                        temperature = temperature - 1;    
-                        if(temperature <0)
-                            temperature = 0;
+                        temperatureFloat = temperatureFloat - 1.0f;    
+                        if(temperatureFloat <0)
+                            temperatureFloat = 0;
                         
                 } else {
-                    temperature = temperature + 1;
+                    temperatureFloat = temperatureFloat + 1;
                     
                 }
-                printf("**** Temperature: %d\n", temperature);
+                printf("**** Temperature: %.1f\n", temperatureFloat);
             }
         }
 
